@@ -14,11 +14,34 @@ const DiagnosisReport: React.FC<DiagnosisReportProps> = ({ report }) => {
   const t = useTexts();
 
   const handlePharmacy = () => {
-    navigate('/pharmacy');
+    // 从诊断报告中提取药方信息
+    const prescriptionMatch = report.match(/(?:治疗方案|处方|药方)[\s\S]*?(?=##|$)/i);
+    const prescription = prescriptionMatch ? prescriptionMatch[0] : '';
+    
+    // 将药方信息作为URL参数传递，在新窗口打开配药网站
+    const encodedPrescription = encodeURIComponent(prescription);
+    const pharmacyUrl = `${window.location.origin}/pharmacy/prescription?prescription=${encodedPrescription}`;
+    window.open(pharmacyUrl, '_blank');
   };
 
   const handleAppointment = () => {
-    navigate('/appointment');
+    // 从诊断报告中提取关键信息
+    const symptomsMatch = report.match(/(?:症状|主诉|现病史)([\s\S]*?)(?=##|$)/i);
+    const diagnosisMatch = report.match(/(?:诊断|病情分析|中医诊断)([\s\S]*?)(?=##|$)/i);
+    
+    const symptoms = symptomsMatch ? symptomsMatch[1].trim() : '';
+    const diagnosis = diagnosisMatch ? diagnosisMatch[1].trim() : '';
+    
+    // 将诊断信息作为URL参数传递，在新窗口打开预约网站
+    const reportData = {
+      symptoms,
+      diagnosis,
+      fullReport: report
+    };
+    
+    const encodedReportData = encodeURIComponent(JSON.stringify(reportData));
+    const appointmentUrl = `${window.location.origin}/appointment/home?report=${encodedReportData}`;
+    window.open(appointmentUrl, '_blank');
   };
 
   const handleDownload = async () => {
