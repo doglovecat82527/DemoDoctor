@@ -57,7 +57,7 @@ const Diagnosis: React.FC = () => {
 
     try {
       // 调用诊断API
-      const response = await axios.post('/api/diagnosis', {
+      const response = await axios.post('/.netlify/functions/diagnosis', {
         input: content,
         language
       });

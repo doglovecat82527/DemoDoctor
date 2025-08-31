@@ -51,7 +51,7 @@ const DiagnosisReport: React.FC<DiagnosisReportProps> = ({ report }) => {
         `中医诊断报告_${timestamp}.md` : 
         `TCM_Diagnosis_Report_${timestamp}.md`;
       
-      const response = await axios.post('/api/download-report', {
+      const response = await axios.post('/.netlify/functions/download-report', {
         report,
         filename
       }, {
