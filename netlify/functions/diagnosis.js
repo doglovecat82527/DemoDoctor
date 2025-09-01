@@ -1,4 +1,4 @@
-const fetch = require('node-fetch');
+// 使用内置的fetch API，无需导入
 
 exports.handler = async (event, context) => {
   console.log('=== Netlify Function 开始执行 ===');
