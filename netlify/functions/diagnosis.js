@@ -173,7 +173,13 @@ Please provide a professional and detailed TCM diagnosis report.`;
         'Access-Control-Allow-Headers': 'Content-Type',
         'Access-Control-Allow-Methods': 'POST, OPTIONS'
       },
-      body: JSON.stringify({ diagnosis })
+      body: JSON.stringify({
+        success: true,
+        data: {
+          report: diagnosis,
+          source: 'api'
+        }
+      })
     };
 
   } catch (error) {
@@ -184,7 +190,10 @@ Please provide a professional and detailed TCM diagnosis report.`;
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*'
       },
-      body: JSON.stringify({ error: '诊断服务暂时不可用' })
+      body: JSON.stringify({
+        success: false,
+        error: '诊断服务暂时不可用，请稍后重试'
+      })
     };
   }
 };

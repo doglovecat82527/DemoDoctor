@@ -56,8 +56,22 @@ const Diagnosis: React.FC = () => {
     setIsLoading(true);
 
     try {
+      // 根据部署平台选择API路径
+      const isNetlify = window.location.hostname.includes('netlify.app');
+      const isVercel = window.location.hostname.includes('vercel.app');
+      
+      let apiUrl: string;
+      if (isNetlify) {
+        apiUrl = '/.netlify/functions/diagnosis';
+      } else if (isVercel) {
+        apiUrl = '/api/diagnosis';
+      } else {
+        // 本地开发环境，默认使用后端API
+        apiUrl = '/api/diagnosis';
+      }
+      
       // 调用诊断API
-      const response = await axios.post('/.netlify/functions/diagnosis', {
+      const response = await axios.post(apiUrl, {
         input: content,
         language
       });
