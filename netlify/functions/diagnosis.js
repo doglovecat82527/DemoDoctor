@@ -1,4 +1,35 @@
 // 使用内置的fetch API，无需导入
+const fs = require('fs');
+const path = require('path');
+
+// 加载预设数据
+let presetData = [];
+try {
+  const presetPath = path.join(__dirname, '../../api/data/preset-diagnosis.json');
+  const presetContent = fs.readFileSync(presetPath, 'utf8');
+  presetData = JSON.parse(presetContent);
+} catch (error) {
+  console.log('Failed to load preset data:', error.message);
+}
+
+// 关键词匹配函数
+function matchPresetData(input) {
+  const inputLower = input.toLowerCase();
+  
+  for (const preset of presetData) {
+    // 检查是否包含关键词
+    const matchCount = preset.keywords.filter(keyword => 
+      inputLower.includes(keyword.toLowerCase())
+    ).length;
+    
+    // 如果匹配到2个或以上关键词，认为匹配成功
+    if (matchCount >= 2) {
+      return preset;
+    }
+  }
+  
+  return null;
+}
 
 exports.handler = async (event, context) => {
   console.log('=== Netlify Function 开始执行 ===');
@@ -26,6 +57,30 @@ exports.handler = async (event, context) => {
         body: JSON.stringify({ error: '缺少必要参数' })
       };
     }
+
+    // 首先尝试匹配预设数据
+    const matchedPreset = matchPresetData(input);
+    if (matchedPreset) {
+      console.log('Found matching preset data for input:', input);
+      return {
+        statusCode: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Headers': 'Content-Type',
+          'Access-Control-Allow-Methods': 'POST, OPTIONS'
+        },
+        body: JSON.stringify({
+          success: true,
+          data: {
+            report: matchedPreset.report[language] || matchedPreset.report.zh,
+            source: 'preset'
+          }
+        })
+      };
+    }
+
+    console.log('No preset match found, calling Deepseek API for input:', input);
 
     // 调用Deepseek API
     const apiKey = process.env.DEEPSEEK_API_KEY;
