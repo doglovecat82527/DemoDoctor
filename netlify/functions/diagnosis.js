@@ -6,12 +6,34 @@ const path = require('path');
 let presetData = [];
 let presetDataStatus = 'not_loaded';
 try {
+  // 在Netlify Functions中，使用相对路径
   const presetPath = path.join(__dirname, '../../api/data/preset-diagnosis.json');
-  console.log('尝试加载预设数据，路径:', presetPath);
-  console.log('当前工作目录:', __dirname);
-  console.log('文件是否存在:', fs.existsSync(presetPath));
+  const alternativePath = path.join(process.cwd(), 'api/data/preset-diagnosis.json');
+  const netlifyPath = path.join(process.cwd(), 'netlify/functions/../../api/data/preset-diagnosis.json');
   
-  const presetContent = fs.readFileSync(presetPath, 'utf8');
+  console.log('尝试加载预设数据');
+  console.log('__dirname:', __dirname);
+  console.log('process.cwd():', process.cwd());
+  console.log('预设路径1:', presetPath);
+  console.log('预设路径2:', alternativePath);
+  console.log('预设路径3:', netlifyPath);
+  console.log('路径1存在:', fs.existsSync(presetPath));
+  console.log('路径2存在:', fs.existsSync(alternativePath));
+  console.log('路径3存在:', fs.existsSync(netlifyPath));
+  
+  let finalPath = presetPath;
+  if (!fs.existsSync(presetPath)) {
+    if (fs.existsSync(alternativePath)) {
+      finalPath = alternativePath;
+    } else if (fs.existsSync(netlifyPath)) {
+      finalPath = netlifyPath;
+    }
+  }
+  
+  console.log('最终使用路径:', finalPath);
+  console.log('最终路径存在:', fs.existsSync(finalPath));
+  
+  const presetContent = fs.readFileSync(finalPath, 'utf8');
   presetData = JSON.parse(presetContent);
   presetDataStatus = 'loaded';
   console.log('预设数据加载成功，条目数量:', presetData.length);
