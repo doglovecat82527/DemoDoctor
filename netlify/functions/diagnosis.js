@@ -1,8 +1,14 @@
 const fetch = require('node-fetch');
 
 exports.handler = async (event, context) => {
+  console.log('=== Netlify Function 开始执行 ===');
+  console.log('HTTP Method:', event.httpMethod);
+  console.log('Headers:', JSON.stringify(event.headers, null, 2));
+  console.log('Body:', event.body);
+  
   // 只允许POST请求
   if (event.httpMethod !== 'POST') {
+    console.log('错误: 不支持的HTTP方法');
     return {
       statusCode: 405,
       body: JSON.stringify({ error: 'Method not allowed' })
@@ -11,8 +17,10 @@ exports.handler = async (event, context) => {
 
   try {
     const { input, language = 'zh' } = JSON.parse(event.body);
+    console.log('解析的输入参数:', { input: input?.substring(0, 100) + '...', language });
     
     if (!input) {
+      console.log('错误: 缺少输入参数');
       return {
         statusCode: 400,
         body: JSON.stringify({ error: '缺少必要参数' })
@@ -21,11 +29,21 @@ exports.handler = async (event, context) => {
 
     // 调用Deepseek API
     const apiKey = process.env.DEEPSEEK_API_KEY;
+    console.log('API密钥检查:', apiKey ? `存在 (长度: ${apiKey.length})` : '不存在');
+    console.log('环境变量列表:', Object.keys(process.env).filter(key => key.includes('DEEPSEEK')));
     
     if (!apiKey) {
+      console.log('错误: API密钥未配置');
       return {
         statusCode: 500,
-        body: JSON.stringify({ error: 'API密钥未配置' })
+        body: JSON.stringify({ 
+          success: false,
+          error: 'API密钥未配置',
+          debug: {
+            env_keys: Object.keys(process.env).filter(key => key.includes('DEEPSEEK')),
+            all_env_keys: Object.keys(process.env).length
+          }
+        })
       };
     }
 
@@ -139,32 +157,56 @@ Please provide a detailed TCM diagnosis report in the following format:
 Please provide a professional and detailed TCM diagnosis report.`;
     }
 
+    console.log('开始调用Deepseek API...');
+    const requestBody = {
+      model: 'deepseek-chat',
+      messages: [
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      temperature: 0.7,
+      max_tokens: 2000
+    };
+    console.log('API请求体:', JSON.stringify(requestBody, null, 2));
+    
     const response = await fetch('https://api.deepseek.com/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`
       },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: [
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        temperature: 0.7,
-        max_tokens: 2000
-      })
+      body: JSON.stringify(requestBody)
     });
 
+    console.log('API响应状态:', response.status);
+    console.log('API响应头:', JSON.stringify([...response.headers.entries()], null, 2));
+
     if (!response.ok) {
-      throw new Error(`API请求失败: ${response.status}`);
+      const errorText = await response.text();
+      console.log('API错误响应:', errorText);
+      throw new Error(`API请求失败: ${response.status} - ${errorText}`);
     }
 
     const data = await response.json();
+    console.log('API响应数据结构:', {
+      choices_length: data.choices?.length,
+      has_message: !!data.choices?.[0]?.message,
+      content_length: data.choices?.[0]?.message?.content?.length
+    });
+    
     const diagnosis = data.choices[0].message.content;
 
+    console.log('成功生成诊断报告，长度:', diagnosis.length);
+    const successResponse = {
+      success: true,
+      data: {
+        report: diagnosis,
+        source: 'netlify-api'
+      }
+    };
+    
     return {
       statusCode: 200,
       headers: {
@@ -173,27 +215,37 @@ Please provide a professional and detailed TCM diagnosis report.`;
         'Access-Control-Allow-Headers': 'Content-Type',
         'Access-Control-Allow-Methods': 'POST, OPTIONS'
       },
-      body: JSON.stringify({
-        success: true,
-        data: {
-          report: diagnosis,
-          source: 'api'
-        }
-      })
+      body: JSON.stringify(successResponse)
     };
 
   } catch (error) {
-    console.error('诊断API错误:', error);
+    console.error('=== 诊断API错误详情 ===');
+    console.error('错误类型:', error.constructor.name);
+    console.error('错误消息:', error.message);
+    console.error('错误堆栈:', error.stack);
+    console.error('=== 错误详情结束 ===');
+    
+    const errorResponse = {
+      success: false,
+      error: '诊断服务暂时不可用，请稍后重试',
+      debug: {
+        error_message: error.message,
+        error_type: error.constructor.name,
+        timestamp: new Date().toISOString(),
+        env_check: {
+          has_api_key: !!process.env.DEEPSEEK_API_KEY,
+          api_key_length: process.env.DEEPSEEK_API_KEY?.length || 0
+        }
+      }
+    };
+    
     return {
       statusCode: 500,
       headers: {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*'
       },
-      body: JSON.stringify({
-        success: false,
-        error: '诊断服务暂时不可用，请稍后重试'
-      })
+      body: JSON.stringify(errorResponse)
     };
   }
 };
