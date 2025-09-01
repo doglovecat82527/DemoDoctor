@@ -2,52 +2,68 @@
 const fs = require('fs').promises;
 const path = require('path');
 
-// 预设数据缓存
-let presetData = [];
-let dataLoaded = false;
+// 预设数据缓存 - 使用模块级缓存但确保线程安全
+let cachedPresetData = null;
+let loadingPromise = null;
 
-// 加载预设数据
+// 加载预设数据 - 线程安全版本
 async function loadPresetData() {
-  if (dataLoaded) return;
-  
-  try {
-    // 尝试多个可能的路径
-    const possiblePaths = [
-      path.join(__dirname, '../api/data/preset-diagnosis.json'),
-      path.join(__dirname, '../data/preset-diagnosis.json'),
-      path.join(__dirname, './preset-diagnosis.json'),
-      path.join(process.cwd(), 'api/data/preset-diagnosis.json'),
-      path.join(process.cwd(), 'data/preset-diagnosis.json')
-    ];
-    
-    let data = null;
-    for (const dataPath of possiblePaths) {
-      try {
-        console.log('尝试加载预设数据:', dataPath);
-        const fileContent = await fs.readFile(dataPath, 'utf-8');
-        data = JSON.parse(fileContent);
-        console.log(`成功从 ${dataPath} 加载 ${data.length} 条预设数据`);
-        break;
-      } catch (err) {
-        console.log(`路径 ${dataPath} 加载失败:`, err.message);
-        continue;
-      }
-    }
-    
-    if (data) {
-      presetData = data;
-      dataLoaded = true;
-    } else {
-      console.warn('所有路径都无法加载预设数据，使用内嵌数据');
-      // 使用内嵌的预设数据作为备用
-      presetData = getEmbeddedPresetData();
-      dataLoaded = true;
-    }
-  } catch (error) {
-    console.error('加载预设数据失败:', error);
-    presetData = getEmbeddedPresetData();
-    dataLoaded = true;
+  // 如果已经有数据，直接返回
+  if (cachedPresetData) {
+    return cachedPresetData;
   }
+  
+  // 如果正在加载，等待加载完成
+  if (loadingPromise) {
+    return await loadingPromise;
+  }
+  
+  // 开始加载数据
+  loadingPromise = (async () => {
+    try {
+      // 尝试多个可能的路径
+      const possiblePaths = [
+        path.join(__dirname, '../api/data/preset-diagnosis.json'),
+        path.join(__dirname, '../data/preset-diagnosis.json'),
+        path.join(__dirname, './preset-diagnosis.json'),
+        path.join(process.cwd(), 'api/data/preset-diagnosis.json'),
+        path.join(process.cwd(), 'data/preset-diagnosis.json')
+      ];
+      
+      let data = null;
+      for (const dataPath of possiblePaths) {
+        try {
+          console.log('尝试加载预设数据:', dataPath);
+          const fileContent = await fs.readFile(dataPath, 'utf-8');
+          data = JSON.parse(fileContent);
+          console.log(`成功从 ${dataPath} 加载 ${data.length} 条预设数据`);
+          break;
+        } catch (err) {
+          console.log(`路径 ${dataPath} 加载失败:`, err.message);
+          continue;
+        }
+      }
+      
+      if (data) {
+        cachedPresetData = data;
+      } else {
+        console.warn('所有路径都无法加载预设数据，使用内嵌数据');
+        // 使用内嵌的预设数据作为备用
+        cachedPresetData = getEmbeddedPresetData();
+      }
+      
+      return cachedPresetData;
+    } catch (error) {
+      console.error('加载预设数据失败:', error);
+      cachedPresetData = getEmbeddedPresetData();
+      return cachedPresetData;
+    } finally {
+      // 清除加载Promise，允许后续重试
+      loadingPromise = null;
+    }
+  })();
+  
+  return await loadingPromise;
 }
 
 // 内嵌的预设数据（备用）
@@ -64,8 +80,13 @@ function getEmbeddedPresetData() {
   ];
 }
 
-// 关键词匹配函数
-function matchPresetData(input) {
+// 关键词匹配函数 - 接收预设数据作为参数，避免全局状态
+function matchPresetData(input, presetData) {
+  if (!presetData || !Array.isArray(presetData)) {
+    console.warn('预设数据无效或为空');
+    return null;
+  }
+  
   const inputLower = input.toLowerCase();
   
   for (const preset of presetData) {
@@ -84,13 +105,17 @@ function matchPresetData(input) {
   return null;
 }
 
-// 调用Deepseek API
+// 调用Deepseek API - 添加超时和并发控制
 async function callDeepseekAPI(input, language = 'zh') {
   const apiKey = process.env.DEEPSEEK_API_KEY;
   
   if (!apiKey) {
     throw new Error('Deepseek API密钥未配置');
   }
+  
+  // 创建超时控制器
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 25000); // 25秒超时
 
   let prompt;
   
@@ -187,7 +212,8 @@ Please provide a professional and detailed TCM analysis.`;
         ],
         max_tokens: 2000,
         temperature: 0.7
-      })
+      }),
+      signal: controller.signal // 添加超时信号
     });
 
     if (!response.ok) {
@@ -197,14 +223,27 @@ Please provide a professional and detailed TCM analysis.`;
     const data = await response.json();
     return data.choices[0]?.message?.content || '抱歉，无法生成诊断报告。';
   } catch (error) {
+    if (error.name === 'AbortError') {
+      console.error('Deepseek API请求超时');
+      throw new Error('AI诊断服务响应超时，请稍后重试。');
+    }
     console.error('Deepseek API调用失败:', error);
     throw new Error('AI诊断服务暂时不可用，请稍后重试。');
+  } finally {
+    clearTimeout(timeoutId); // 清除超时定时器
   }
 }
 
 exports.handler = async (event, context) => {
-  console.log('Diagnosis function called - 完整版本');
-  console.log('Event method:', event.httpMethod);
+  // 生成请求ID用于追踪
+  const requestId = Math.random().toString(36).substring(2, 15);
+  console.log(`[${requestId}] Diagnosis function called - 完整版本`);
+  console.log(`[${requestId}] Event method:`, event.httpMethod);
+  
+  // 设置函数超时时间（Netlify Functions默认10秒，我们设置8秒内完成）
+  const functionTimeout = setTimeout(() => {
+    console.error(`[${requestId}] Function timeout after 8 seconds`);
+  }, 8000);
   
   // 处理CORS预检请求
   if (event.httpMethod === 'OPTIONS') {
@@ -235,10 +274,12 @@ exports.handler = async (event, context) => {
   }
   
   try {
-    // 确保预设数据已加载
-    await loadPresetData();
+    // 加载预设数据 - 每个请求独立获取
+    console.log(`[${requestId}] Loading preset data...`);
+    const presetData = await loadPresetData();
+    console.log(`[${requestId}] Preset data loaded, count:`, presetData?.length || 0);
     
-    console.log('Request body:', event.body);
+    console.log(`[${requestId}] Request body:`, event.body);
     
     let requestData;
     try {
@@ -259,8 +300,8 @@ exports.handler = async (event, context) => {
     }
     
     const { input, language = 'zh' } = requestData;
-    console.log('Input:', input);
-    console.log('Language:', language);
+    console.log(`[${requestId}] Input:`, input);
+    console.log(`[${requestId}] Language:`, language);
     
     if (!input || typeof input !== 'string' || input.trim().length === 0) {
       return {
@@ -276,11 +317,12 @@ exports.handler = async (event, context) => {
       };
     }
     
-    // 首先尝试匹配预设数据
-    const presetMatch = matchPresetData(input.trim());
+    // 首先尝试匹配预设数据 - 传递预设数据作为参数
+    console.log(`[${requestId}] Attempting to match preset data...`);
+    const presetMatch = matchPresetData(input.trim(), presetData);
     
     if (presetMatch) {
-      console.log('使用预设数据返回诊断报告');
+      console.log(`[${requestId}] Using preset data for diagnosis report`);
       // 返回预设数据
       let report;
       if (language === 'en' && presetMatch.report.en) {
@@ -311,10 +353,10 @@ exports.handler = async (event, context) => {
     }
 
     // 如果没有匹配到预设数据，调用Deepseek API
-    console.log('未匹配到预设数据，调用Deepseek API');
+    console.log(`[${requestId}] No preset match found, calling Deepseek API...`);
     try {
       const report = await callDeepseekAPI(input.trim(), language);
-      console.log('Deepseek API调用成功');
+      console.log(`[${requestId}] Deepseek API call successful`);
       return {
         statusCode: 200,
         headers: {
@@ -333,7 +375,7 @@ exports.handler = async (event, context) => {
         })
       };
     } catch (apiError) {
-      console.error('Deepseek API调用失败:', apiError);
+      console.error(`[${requestId}] Deepseek API call failed:`, apiError);
       // API调用失败时返回默认响应
       let defaultReport;
       
@@ -381,7 +423,7 @@ Based on your symptoms, we recommend:
     }
     
   } catch (error) {
-    console.error('Function error:', error);
+    console.error(`[${requestId}] Function error:`, error);
     
     return {
       statusCode: 500,
@@ -393,8 +435,12 @@ Based on your symptoms, we recommend:
         success: false,
         error: 'Internal server error',
         details: error.message,
+        requestId,
         timestamp: new Date().toISOString()
       })
     };
+  } finally {
+    clearTimeout(functionTimeout);
+    console.log(`[${requestId}] Function execution completed`);
   }
 };
