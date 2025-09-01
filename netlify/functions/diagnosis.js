@@ -115,7 +115,7 @@ async function callDeepseekAPI(input, language = 'zh') {
   
   // 创建超时控制器
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 25000); // 25秒超时
+  const timeoutId = setTimeout(() => controller.abort(), 6000); // 6秒超时
 
   let prompt;
   
@@ -213,37 +213,55 @@ Please provide a professional and detailed TCM analysis.`;
         max_tokens: 2000,
         temperature: 0.7
       }),
-      signal: controller.signal // 添加超时信号
+      signal: controller.signal
     });
-
+    
+    clearTimeout(timeoutId);
+    
     if (!response.ok) {
-      throw new Error(`Deepseek API请求失败: ${response.status}`);
+      const errorText = await response.text();
+      throw new Error(`API请求失败: ${response.status} ${response.statusText} - ${errorText}`);
     }
-
+    
     const data = await response.json();
-    return data.choices[0]?.message?.content || '抱歉，无法生成诊断报告。';
-  } catch (error) {
-    if (error.name === 'AbortError') {
-      console.error('Deepseek API请求超时');
-      throw new Error('AI诊断服务响应超时，请稍后重试。');
+    
+    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+      throw new Error('API响应格式无效');
     }
+    
+    return data.choices[0].message.content;
+    
+  } catch (error) {
+    clearTimeout(timeoutId);
+    
+    if (error.name === 'AbortError') {
+      throw new Error('API请求超时');
+    }
+    
     console.error('Deepseek API调用失败:', error);
-    throw new Error('AI诊断服务暂时不可用，请稍后重试。');
-  } finally {
-    clearTimeout(timeoutId); // 清除超时定时器
+    throw error;
   }
 }
 
+// 生成唯一请求ID
+function generateRequestId() {
+  return `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+// Netlify Functions 处理函数 - 并发安全版本
 exports.handler = async (event, context) => {
-  // 生成请求ID用于追踪
-  const requestId = Math.random().toString(36).substring(2, 15);
-  console.log(`[${requestId}] Diagnosis function called - 完整版本`);
-  console.log(`[${requestId}] Event method:`, event.httpMethod);
+  // 为每个请求生成唯一ID
+  const requestId = generateRequestId();
+  console.log(`[${requestId}] Function started at ${new Date().toISOString()}`);
+  console.log(`[${requestId}] HTTP Method: ${event.httpMethod}`);
+  console.log(`[${requestId}] Headers:`, JSON.stringify(event.headers, null, 2));
   
-  // 设置函数超时时间（Netlify Functions默认10秒，我们设置8秒内完成）
+  // 设置函数超时控制器
+  const functionController = new AbortController();
   const functionTimeout = setTimeout(() => {
-    console.error(`[${requestId}] Function timeout after 8 seconds`);
-  }, 8000);
+    console.log(`[${requestId}] Function timeout reached`);
+    functionController.abort();
+  }, 8000); // 8秒超时
   
   // 处理CORS预检请求
   if (event.httpMethod === 'OPTIONS') {
@@ -355,7 +373,16 @@ exports.handler = async (event, context) => {
     // 如果没有匹配到预设数据，调用Deepseek API
     console.log(`[${requestId}] No preset match found, calling Deepseek API...`);
     try {
-      const report = await callDeepseekAPI(input.trim(), language);
+      // 使用Promise.race来实现真正的超时控制
+      const apiPromise = callDeepseekAPI(input.trim(), language);
+      const timeoutPromise = new Promise((_, reject) => {
+        functionController.signal.addEventListener('abort', () => {
+          reject(new Error('Function timeout'));
+        });
+      });
+      
+      const report = await Promise.race([apiPromise, timeoutPromise]);
+      clearTimeout(functionTimeout);
       console.log(`[${requestId}] Deepseek API call successful`);
       return {
         statusCode: 200,
@@ -375,6 +402,7 @@ exports.handler = async (event, context) => {
         })
       };
     } catch (apiError) {
+      clearTimeout(functionTimeout);
       console.error(`[${requestId}] Deepseek API call failed:`, apiError);
       // API调用失败时返回默认响应
       let defaultReport;
@@ -423,6 +451,7 @@ Based on your symptoms, we recommend:
     }
     
   } catch (error) {
+    clearTimeout(functionTimeout);
     console.error(`[${requestId}] Function error:`, error);
     
     return {
