@@ -4,12 +4,26 @@ const path = require('path');
 
 // 加载预设数据
 let presetData = [];
+let presetDataStatus = 'not_loaded';
 try {
   const presetPath = path.join(__dirname, '../../api/data/preset-diagnosis.json');
+  console.log('尝试加载预设数据，路径:', presetPath);
+  console.log('当前工作目录:', __dirname);
+  console.log('文件是否存在:', fs.existsSync(presetPath));
+  
   const presetContent = fs.readFileSync(presetPath, 'utf8');
   presetData = JSON.parse(presetContent);
+  presetDataStatus = 'loaded';
+  console.log('预设数据加载成功，条目数量:', presetData.length);
+  console.log('预设数据示例:', presetData.slice(0, 2).map(item => ({
+    id: item.id,
+    keywords: item.keywords,
+    hasReport: !!item.report
+  })));
 } catch (error) {
-  console.log('Failed to load preset data:', error.message);
+  presetDataStatus = 'failed';
+  console.error('预设数据加载失败:', error.message);
+  console.error('错误详情:', error.stack);
 }
 
 // 关键词匹配函数
@@ -32,10 +46,15 @@ function matchPresetData(input) {
 }
 
 exports.handler = async (event, context) => {
+  const startTime = Date.now();
   console.log('=== Netlify Function 开始执行 ===');
+  console.log('执行时间:', new Date().toISOString());
   console.log('HTTP Method:', event.httpMethod);
-  console.log('Headers:', JSON.stringify(event.headers, null, 2));
-  console.log('Body:', event.body);
+  console.log('User-Agent:', event.headers['user-agent']);
+  console.log('Origin:', event.headers.origin);
+  console.log('Body length:', event.body?.length || 0);
+  console.log('预设数据状态:', presetDataStatus);
+  console.log('预设数据条目数:', presetData.length);
   
   // 只允许POST请求
   if (event.httpMethod !== 'POST') {
@@ -84,8 +103,11 @@ exports.handler = async (event, context) => {
 
     // 调用Deepseek API
     const apiKey = process.env.DEEPSEEK_API_KEY;
-    console.log('API密钥检查:', apiKey ? `存在 (长度: ${apiKey.length})` : '不存在');
-    console.log('环境变量列表:', Object.keys(process.env).filter(key => key.includes('DEEPSEEK')));
+    console.log('API密钥检查:', apiKey ? `存在 (长度: ${apiKey.length}, 前缀: ${apiKey.substring(0, 8)}...)` : '不存在');
+    console.log('所有环境变量数量:', Object.keys(process.env).length);
+    console.log('DEEPSEEK相关环境变量:', Object.keys(process.env).filter(key => key.includes('DEEPSEEK')));
+    console.log('NODE_ENV:', process.env.NODE_ENV);
+    console.log('NETLIFY:', process.env.NETLIFY);
     
     if (!apiKey) {
       console.log('错误: API密钥未配置');
@@ -224,83 +246,124 @@ Please provide a professional and detailed TCM diagnosis report.`;
       temperature: 0.7,
       max_tokens: 2000
     };
-    console.log('API请求体:', JSON.stringify(requestBody, null, 2));
+    console.log('API请求体大小:', JSON.stringify(requestBody).length, 'bytes');
+    console.log('Prompt长度:', prompt.length);
     
-    const response = await fetch('https://api.deepseek.com/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify(requestBody)
-    });
+    // 添加超时控制
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      console.log('API调用超时，中止请求');
+      controller.abort();
+    }, 25000); // 25秒超时
+    
+    try {
+      const response = await fetch('https://api.deepseek.com/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
 
-    console.log('API响应状态:', response.status);
-    console.log('API响应头:', JSON.stringify([...response.headers.entries()], null, 2));
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.log('API错误响应:', errorText);
-      throw new Error(`API请求失败: ${response.status} - ${errorText}`);
+      console.log('API响应状态:', response.status);
+      console.log('API响应头Content-Type:', response.headers.get('content-type'));
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('API调用失败:', response.status, errorText);
+        throw new Error(`API调用失败: ${response.status} ${errorText}`);
+      }
+      
+      const data = await response.json();
+      console.log('API响应数据结构:', {
+        hasChoices: !!data.choices,
+        choicesLength: data.choices?.length || 0,
+        hasUsage: !!data.usage,
+        model: data.model
+      });
+      
+      if (data.choices && data.choices.length > 0) {
+        const diagnosis = data.choices[0].message.content;
+        console.log('诊断结果长度:', diagnosis.length);
+        console.log('诊断结果前100字符:', diagnosis.substring(0, 100));
+        
+        const executionTime = Date.now() - startTime;
+        console.log('总执行时间:', executionTime, 'ms');
+        
+        return {
+          statusCode: 200,
+          headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Content-Type',
+            'Access-Control-Allow-Methods': 'POST, OPTIONS'
+          },
+          body: JSON.stringify({
+            success: true,
+            data: {
+              report: diagnosis,
+              source: 'deepseek_api',
+              executionTime: executionTime
+            }
+          })
+        };
+      } else {
+        console.error('API响应格式异常:', data);
+        throw new Error('API响应格式异常');
+      }
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      console.error('API调用异常:', fetchError.message);
+      console.error('异常类型:', fetchError.name);
+      console.error('异常堆栈:', fetchError.stack);
+      
+      if (fetchError.name === 'AbortError') {
+        console.log('请求被中止（超时）');
+        throw new Error('API调用超时，请稍后重试');
+      }
+      throw fetchError;
     }
 
-    const data = await response.json();
-    console.log('API响应数据结构:', {
-      choices_length: data.choices?.length,
-      has_message: !!data.choices?.[0]?.message,
-      content_length: data.choices?.[0]?.message?.content?.length
-    });
+  } catch (error) {
+    const executionTime = Date.now() - startTime;
+    console.error('=== 诊断服务错误 ===');
+    console.error('错误时间:', new Date().toISOString());
+    console.error('执行时间:', executionTime, 'ms');
+    console.error('错误消息:', error.message);
+    console.error('错误类型:', error.name);
+    console.error('错误堆栈:', error.stack);
+    console.error('预设数据状态:', presetDataStatus);
+    console.error('环境变量DEEPSEEK_API_KEY存在:', !!process.env.DEEPSEEK_API_KEY);
     
-    const diagnosis = data.choices[0].message.content;
-
-    console.log('成功生成诊断报告，长度:', diagnosis.length);
-    const successResponse = {
-      success: true,
-      data: {
-        report: diagnosis,
-        source: 'netlify-api'
-      }
-    };
+    // 根据错误类型提供更具体的错误信息
+    let errorMessage = '诊断服务暂时不可用，请稍后重试';
+    if (error.message.includes('超时')) {
+      errorMessage = '诊断服务响应超时，请稍后重试';
+    } else if (error.message.includes('API密钥')) {
+      errorMessage = '服务配置错误，请联系管理员';
+    } else if (error.message.includes('网络')) {
+      errorMessage = '网络连接异常，请检查网络后重试';
+    }
     
     return {
-      statusCode: 200,
+      statusCode: 500,
       headers: {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Content-Type',
         'Access-Control-Allow-Methods': 'POST, OPTIONS'
       },
-      body: JSON.stringify(successResponse)
-    };
-
-  } catch (error) {
-    console.error('=== 诊断API错误详情 ===');
-    console.error('错误类型:', error.constructor.name);
-    console.error('错误消息:', error.message);
-    console.error('错误堆栈:', error.stack);
-    console.error('=== 错误详情结束 ===');
-    
-    const errorResponse = {
-      success: false,
-      error: '诊断服务暂时不可用，请稍后重试',
-      debug: {
-        error_message: error.message,
-        error_type: error.constructor.name,
-        timestamp: new Date().toISOString(),
-        env_check: {
-          has_api_key: !!process.env.DEEPSEEK_API_KEY,
-          api_key_length: process.env.DEEPSEEK_API_KEY?.length || 0
-        }
-      }
-    };
-    
-    return {
-      statusCode: 500,
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
-      },
-      body: JSON.stringify(errorResponse)
+      body: JSON.stringify({
+        success: false,
+        error: errorMessage,
+        details: error.message,
+        executionTime: executionTime,
+        timestamp: new Date().toISOString()
+      })
     };
   }
 };

@@ -5,7 +5,8 @@
 
 [build.environment]
   NODE_VERSION = "18"
-  DEEPSEEK_API_KEY = "sk-9256b6bce03e4ec48c0c527ba5dc0934"
+  # DEEPSEEK_API_KEY should be configured in Netlify dashboard
+  # Environment Variables section for security
 
 [[redirects]]
   from = "/*"
