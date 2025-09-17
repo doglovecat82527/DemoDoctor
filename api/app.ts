@@ -1,10 +1,15 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import diagnosisRouter from './routes/diagnosis.js';
 
 // Load environment variables
 dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -12,6 +17,9 @@ const PORT = process.env.PORT || 3001;
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// 静态文件服务 - 提供data目录下的JSON文件
+app.use('/api/data', express.static(path.join(__dirname, 'data')));
 
 // Routes
 app.get('/api/health', (req, res) => {

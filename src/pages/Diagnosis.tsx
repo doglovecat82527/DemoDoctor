@@ -50,15 +50,26 @@ const Diagnosis: React.FC = () => {
     try {
       const response = await fetch('/api/data/preset-diagnosis.json');
       const data = await response.json();
-      setPresetData(data);
+      if (Array.isArray(data)) {
+        setPresetData(data);
+      } else {
+        console.error('预设数据格式错误，不是数组:', data);
+        setPresetData([]);
+      }
     } catch (error) {
       console.error('加载预设数据失败:', error);
       // 如果API路径不可用，尝试直接导入
       try {
         const module = await import('../../api/data/preset-diagnosis.json');
-        setPresetData(module.default);
+        if (Array.isArray(module.default)) {
+          setPresetData(module.default);
+        } else {
+          console.error('导入的预设数据格式错误，不是数组:', module.default);
+          setPresetData([]);
+        }
       } catch (importError) {
         console.error('导入预设数据失败:', importError);
+        setPresetData([]);
       }
     }
   };
