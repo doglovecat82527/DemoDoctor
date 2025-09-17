@@ -23,9 +23,9 @@ async function loadPresetData() {
     try {
       // 尝试多个可能的路径
       const possiblePaths = [
+        path.join(__dirname, './preset-diagnosis.json'),
         path.join(__dirname, '../api/data/preset-diagnosis.json'),
         path.join(__dirname, '../data/preset-diagnosis.json'),
-        path.join(__dirname, './preset-diagnosis.json'),
         path.join(process.cwd(), 'api/data/preset-diagnosis.json'),
         path.join(process.cwd(), 'data/preset-diagnosis.json')
       ];
