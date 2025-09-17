@@ -56,6 +56,22 @@ export default function ChatInterface({ messages: externalMessages, onSendMessag
     scrollToBottom();
   }, [messages]);
 
+  // 监听填充输入框的自定义事件
+  useEffect(() => {
+    const handleFillInput = (event: CustomEvent) => {
+      setInputValue(event.detail);
+      // 聚焦到输入框
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+      }
+    };
+
+    window.addEventListener('fillInput', handleFillInput as EventListener);
+    return () => {
+      window.removeEventListener('fillInput', handleFillInput as EventListener);
+    };
+  }, []);
+
   const handleSend = async () => {
     if (!inputValue.trim() || isLoading) return;
 
